@@ -52,6 +52,7 @@ export function createNeurograph(canvas, options = {}) {
   let o = { ...DEFAULTS, ...options };
 
   let W = 0, H = 0, raf = 0, rot = 0, last = performance.now(), running = false;
+  let lastDraw = -Infinity; // em 120 Hz desenha 1 frame a cada 2 (o movimento é por frame, calibrado a 60 Hz)
   let BRAIN = null, nodes = [], live = [], ripple = null;
   const mouse = { x: -9999, y: -9999, on: false };
 
@@ -180,7 +181,26 @@ export function createNeurograph(canvas, options = {}) {
   }
 
   /* ---------------- render ---------------- */
+  // sprites do glow: 16 tons entre colorA e colorB, refeitos quando cor ou glow mudam
+  const GT = 16; let glowSprites = null, glowKey = "";
+  function glowSprite(tone, RA, RB) {
+    const key = o.colorA + o.colorB + o.glow;
+    if (glowKey !== key) { glowSprites = new Array(GT).fill(null); glowKey = key; }
+    const tb = Math.min(GT - 1, (tone * GT) | 0);
+    let s = glowSprites[tb]; if (s) return s;
+    const c = mix(RA, RB, (tb + 0.5) / GT), size = 64, cv = document.createElement("canvas");
+    cv.width = cv.height = size;
+    const g = cv.getContext("2d"), grd = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    grd.addColorStop(0, `rgba(${c[0]},${c[1]},${c[2]},${(0.9 * o.glow).toFixed(3)})`);
+    grd.addColorStop(0.3, `rgba(${c[0]},${c[1]},${c[2]},${(0.4 * o.glow).toFixed(3)})`);
+    grd.addColorStop(1, `rgba(${c[0]},${c[1]},${c[2]},0)`);
+    g.fillStyle = grd; g.fillRect(0, 0, size, size);
+    return (glowSprites[tb] = cv);
+  }
+
   function frame(now) {
+    if (running && now - lastDraw < 12) { raf = requestAnimationFrame(frame); return; } // cap ~60 fps
+    lastDraw = now;
     const RA = hex2rgb(o.colorA), RB = hex2rgb(o.colorB);
     const dt = Math.min(32, now - last); last = now;
     rot += 0.00022 * dt * (0.3 + o.speed);
@@ -235,6 +255,7 @@ export function createNeurograph(canvas, options = {}) {
       (grid.get(k) || grid.set(k, []).get(k)).push(idx);
     });
     ctx.lineWidth = 1;
+    const TB = 6, AB = 16, linkBuckets = new Array(TB * AB).fill(null);
     for (const n of nodes) {
       const ci = Math.floor(n.x / cell), cj = Math.floor(n.y / cell);
       for (let i = ci; i <= ci + 1; i++) for (let j = cj - 1; j <= cj + 1; j++) {
@@ -253,25 +274,41 @@ export function createNeurograph(canvas, options = {}) {
             const rd = Math.abs(Math.hypot(n.x - ripple.x, n.y - ripple.y) - ripple.r);
             if (rd < 60) a += (1 - rd / 60) * ripple.a;
           }
-          const c = mix(RA, RB, (n.tone + m.tone) / 2);
-          ctx.strokeStyle = `rgba(${c[0]},${c[1]},${c[2]},${Math.min(a, 1).toFixed(3)})`;
-          ctx.beginPath(); ctx.moveTo(n.x, n.y); ctx.lineTo(m.x, m.y); ctx.stroke();
+          // um Path2D por balde de (tom, alpha): dezenas de strokes por frame em vez de milhares
+          const tb = Math.min(TB - 1, ((n.tone + m.tone) / 2 * TB) | 0);
+          const ab = Math.min(AB - 1, (Math.min(a, 1) * AB) | 0);
+          const bk = tb * AB + ab;
+          let p = linkBuckets[bk]; if (!p) p = linkBuckets[bk] = new Path2D();
+          p.moveTo(n.x, n.y); p.lineTo(m.x, m.y);
         }
       }
     }
+    for (let bk = 0; bk < linkBuckets.length; bk++) {
+      const p = linkBuckets[bk]; if (!p) continue;
+      const c = mix(RA, RB, ((bk / AB | 0) + 0.5) / TB);
+      ctx.strokeStyle = `rgba(${c[0]},${c[1]},${c[2]},${(((bk % AB) + 0.5) / AB).toFixed(3)})`;
+      ctx.stroke(p);
+    }
 
-    ctx.shadowBlur = 14 * o.glow;
+    // glow dos pontos por sprite (gradiente radial pré-renderizado por tom) em vez de shadowBlur:
+    // centenas de arcos com sombra por frame caem no raster lento e seguram o frame inteiro
+    // (tela cheia a 6 fps), mesmo com o JS barato. Frente perf3.
     for (const n of nodes) {
       const c = mix(RA, RB, n.tone);
       const puls = 0.75 + Math.sin(n.t) * 0.35;
       const a = (o.shape === "globe" ? n.z * 0.85 + 0.15 : 1) * (0.55 + 0.45 * puls);
-      ctx.shadowColor = `rgba(${c[0]},${c[1]},${c[2]},${0.9 * o.glow})`;
+      const rr = n.r * puls * (o.shape === "globe" ? 0.6 + n.z * 0.9 : 1);
+      if (o.glow > 0) {
+        const R = rr + 14 * o.glow;
+        ctx.globalAlpha = a;
+        ctx.drawImage(glowSprite(n.tone, RA, RB), n.x - R, n.y - R, 2 * R, 2 * R);
+        ctx.globalAlpha = 1;
+      }
       ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${a.toFixed(3)})`;
       ctx.beginPath();
-      ctx.arc(n.x, n.y, n.r * puls * (o.shape === "globe" ? 0.6 + n.z * 0.9 : 1), 0, 6.283);
+      ctx.arc(n.x, n.y, rr, 0, 6.283);
       ctx.fill();
     }
-    ctx.shadowBlur = 0;
 
     let tries = 0;
     while (live.length < o.pulses && tries++ < 40) spawn();
