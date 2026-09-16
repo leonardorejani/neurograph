@@ -99,7 +99,7 @@ const SHAPE = {"aspect":0.8406,"outline":["476 0 503 1 530 8 590 9 645 19 705 37
   const mix = (a,b,t) => [Math.round(a[0]+(b[0]-a[0])*t), Math.round(a[1]+(b[1]-a[1])*t), Math.round(a[2]+(b[2]-a[2])*t)];
   let RA = hex2rgb(cfg.colorA), RB = hex2rgb(cfg.colorB);
 
-  let BRAIN = null, nodes = [], live = [], ripple = null;
+  let BRAIN = null, nodes = [], live = [], ripples = [];
   const mouse = { x:-9999, y:-9999, on:false };
 
   function buildBrain() {
@@ -275,12 +275,22 @@ const SHAPE = {"aspect":0.8406,"outline":["476 0 503 1 530 8 590 9 645 19 705 37
       }
       if (mouse.on) {
         const dx=n.x-mouse.x, dy=n.y-mouse.y, d=Math.hypot(dx,dy);
-        if (d < 150 && d > .001) { const f=(1-d/150)*1.6; n.x+=dx/d*f; n.y+=dy/d*f; }
+        if (d < 150 && d > .001) {
+          const f=(1-d/150)*1.6, px=n.x+dx/d*f, py=n.y+dy/d*f;
+          // brain: the mouse dents the network, it does not tear it. The push stops at
+          // 40px from the anchor and never leaves the silhouette.
+          if (cfg.mode !== 'brain' || (Math.hypot(px-n.ox, py-n.oy) < 40 && inside(px,py))) { n.x=px; n.y=py; }
+        }
+      }
+      // a node the mouse pushed away snaps back instead of orbiting its anchor for seconds
+      if (cfg.mode === 'brain' && Math.hypot(n.x-n.ox, n.y-n.oy) > 12) {
+        n.vx = (n.vx + (n.ox-n.x)*.02)*.9; n.vy = (n.vy + (n.oy-n.y)*.02)*.9;
       }
       n.t += .02 + n.r*.004;
     }
 
-    if (ripple) { ripple.r += 9; ripple.a *= .965; if (ripple.a < .02) ripple = null; }
+    for (const rp of ripples) { rp.r += 9; rp.a *= .965; }
+    ripples = ripples.filter(rp => rp.a >= .02);
 
     const cell = cfg.dist, grid = new Map(), key = (i,j) => i+','+j;
     nodes.forEach((n,idx) => {
@@ -303,9 +313,9 @@ const SHAPE = {"aspect":0.8406,"outline":["476 0 503 1 530 8 590 9 645 19 705 37
             const md = Math.hypot((n.x+m.x)/2-mouse.x, (n.y+m.y)/2-mouse.y);
             if (md < 150) a += (1-md/150)*.5;
           }
-          if (ripple) {
-            const rd = Math.abs(Math.hypot(n.x-ripple.x, n.y-ripple.y) - ripple.r);
-            if (rd < 60) a += (1-rd/60)*ripple.a;
+          for (const rp of ripples) {
+            const rd = Math.abs(Math.hypot(n.x-rp.x, n.y-rp.y) - rp.r);
+            if (rd < 60) a += (1-rd/60)*rp.a;
           }
           // one Path2D per (tone, alpha) bucket: dozens of strokes per frame instead of thousands
           const tb = Math.min(TB-1, ((n.tone+m.tone)/2*TB)|0);
@@ -367,7 +377,8 @@ const SHAPE = {"aspect":0.8406,"outline":["476 0 503 1 530 8 590 9 645 19 705 37
   canvas.addEventListener('pointermove', e => { mouse.x=e.clientX; mouse.y=e.clientY; mouse.on=true; });
   canvas.addEventListener('pointerleave', () => { mouse.on=false; mouse.x=mouse.y=-9999; });
   canvas.addEventListener('pointerdown', e => {
-    ripple = { x:e.clientX, y:e.clientY, r:0, a:.9 };
+    // every click fires its own wave; the older ones keep travelling (at most 8 alive)
+    ripples.push({ x:e.clientX, y:e.clientY, r:0, a:.9 }); if (ripples.length > 8) ripples.shift();
     for (let i=0;i<25;i++) spawn();
   });
 

@@ -53,7 +53,7 @@ export function createNeurograph(canvas, options = {}) {
 
   let W = 0, H = 0, dpr = 1, raf = 0, rot = 0, last = performance.now(), running = false;
   let lastDraw = -Infinity; // em 120 Hz desenha 1 frame a cada 2 (o movimento é por frame, calibrado a 60 Hz)
-  let BRAIN = null, nodes = [], live = [], ripple = null;
+  let BRAIN = null, nodes = [], live = [], ripples = [];
   const mouse = { x: -9999, y: -9999, on: false };
 
   const rnd = (a, b) => a + Math.random() * (b - a);
@@ -243,12 +243,22 @@ export function createNeurograph(canvas, options = {}) {
       }
       if (o.interactive && mouse.on) {
         const dx = n.x - mouse.x, dy = n.y - mouse.y, d = Math.hypot(dx, dy);
-        if (d < 150 && d > 0.001) { const f = (1 - d / 150) * 1.6; n.x += (dx / d) * f; n.y += (dy / d) * f; }
+        if (d < 150 && d > 0.001) {
+          const f = (1 - d / 150) * 1.6, px = n.x + (dx / d) * f, py = n.y + (dy / d) * f;
+          // brain: the mouse dents the network, it does not tear it. The push stops at
+          // 40px from the anchor and never leaves the silhouette.
+          if (o.shape !== "brain" || (Math.hypot(px - n.ox, py - n.oy) < 40 && inside(px, py))) { n.x = px; n.y = py; }
+        }
+      }
+      // a node the mouse pushed away snaps back instead of orbiting its anchor for seconds
+      if (o.shape === "brain" && Math.hypot(n.x - n.ox, n.y - n.oy) > 12) {
+        n.vx = (n.vx + (n.ox - n.x) * 0.02) * 0.9; n.vy = (n.vy + (n.oy - n.y) * 0.02) * 0.9;
       }
       n.t += 0.02 + n.r * 0.004;
     }
 
-    if (ripple) { ripple.r += 9; ripple.a *= 0.965; if (ripple.a < 0.02) ripple = null; }
+    for (const rp of ripples) { rp.r += 9; rp.a *= 0.965; }
+    ripples = ripples.filter((rp) => rp.a >= 0.02);
 
     // links through a spatial grid (O(n) instead of O(n²))
     const cell = o.linkDistance, grid = new Map(), key = (i, j) => i + "," + j;
@@ -272,9 +282,9 @@ export function createNeurograph(canvas, options = {}) {
             const md = Math.hypot((n.x + m.x) / 2 - mouse.x, (n.y + m.y) / 2 - mouse.y);
             if (md < 150) a += (1 - md / 150) * 0.5;
           }
-          if (ripple) {
-            const rd = Math.abs(Math.hypot(n.x - ripple.x, n.y - ripple.y) - ripple.r);
-            if (rd < 60) a += (1 - rd / 60) * ripple.a;
+          for (const rp of ripples) {
+            const rd = Math.abs(Math.hypot(n.x - rp.x, n.y - rp.y) - rp.r);
+            if (rd < 60) a += (1 - rd / 60) * rp.a;
           }
           // um Path2D por balde de (tom, alpha): dezenas de strokes por frame em vez de milhares
           const tb = Math.min(TB - 1, ((n.tone + m.tone) / 2 * TB) | 0);
@@ -344,7 +354,8 @@ export function createNeurograph(canvas, options = {}) {
   const onDown = (e) => {
     if (!o.interactive) return;
     const r = canvas.getBoundingClientRect();
-    ripple = { x: e.clientX - r.left, y: e.clientY - r.top, r: 0, a: 0.9 };
+    // every click fires its own wave; the older ones keep travelling (at most 8 alive)
+    ripples.push({ x: e.clientX - r.left, y: e.clientY - r.top, r: 0, a: 0.9 }); if (ripples.length > 8) ripples.shift();
     for (let i = 0; i < 25; i++) spawn();
   };
 
