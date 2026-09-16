@@ -51,7 +51,7 @@ export function createNeurograph(canvas, options = {}) {
   const ctx = canvas.getContext("2d");
   let o = { ...DEFAULTS, ...options };
 
-  let W = 0, H = 0, raf = 0, rot = 0, last = performance.now(), running = false;
+  let W = 0, H = 0, dpr = 1, raf = 0, rot = 0, last = performance.now(), running = false;
   let lastDraw = -Infinity; // em 120 Hz desenha 1 frame a cada 2 (o movimento é por frame, calibrado a 60 Hz)
   let BRAIN = null, nodes = [], live = [], ripple = null;
   const mouse = { x: -9999, y: -9999, on: false };
@@ -103,7 +103,9 @@ export function createNeurograph(canvas, options = {}) {
     BRAIN = { path, sPath, rails, bbox: { x: minX, y: minY, w: maxX - minX, h: maxY - minY }, S };
   }
 
-  const inside = (x, y) => ctx.isPointInPath(BRAIN.path, x, y, "nonzero");
+  // isPointInPath applies the current transform to the PATH but not to the
+  // POINT, so on a dpr-scaled canvas the point must be given in device pixels.
+  const inside = (x, y) => ctx.isPointInPath(BRAIN.path, x * dpr, y * dpr, "nonzero");
 
   /* Constant spacing along the sulci = uniform linear density.
      Without this the cerebellum, which is densely hatched, would swallow
@@ -161,7 +163,7 @@ export function createNeurograph(canvas, options = {}) {
   }
 
   function resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, o.maxDpr);
+    dpr = Math.min(window.devicePixelRatio || 1, o.maxDpr);
     W = canvas.clientWidth; H = canvas.clientHeight;
     if (!W || !H) return;
     canvas.width = Math.floor(W * dpr); canvas.height = Math.floor(H * dpr);
